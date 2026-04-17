@@ -13,6 +13,7 @@ const ADMIN_NAME = process.env.ADMIN_NAME || "Salon Admin";
 const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || "admin@familysalonspasauyo.com").trim().toLowerCase();
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "ChangeMe123!";
 const SESSION_TTL_DAYS = 7;
+let dbReadyPromise = null;
 
 if (!MONGODB_URI) {
   console.error("Missing MONGODB_URI. Add it in your .env file.");
@@ -29,8 +30,25 @@ function createPasswordHash(password, salt = crypto.randomBytes(16).toString("he
 }
 
 function verifyPassword(password, salt, expectedHash) {
+  if (
+    typeof salt !== "string" ||
+    typeof expectedHash !== "string" ||
+    !salt.trim() ||
+    !expectedHash.trim() ||
+    expectedHash.length % 2 !== 0
+  ) {
+    return false;
+  }
+
   const hash = crypto.scryptSync(password, salt, 64).toString("hex");
-  return crypto.timingSafeEqual(Buffer.from(hash, "hex"), Buffer.from(expectedHash, "hex"));
+  const actualBuffer = Buffer.from(hash, "hex");
+  const expectedBuffer = Buffer.from(expectedHash, "hex");
+
+  if (actualBuffer.length !== expectedBuffer.length) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(actualBuffer, expectedBuffer);
 }
 
 function createSessionToken() {
@@ -189,9 +207,33 @@ async function ensureDefaultAdmin() {
     return;
   }
 
+  let updated = false;
+
+  if (existing.name !== ADMIN_NAME) {
+    existing.name = ADMIN_NAME;
+    updated = true;
+  }
+
   if (existing.role !== "admin") {
     existing.role = "admin";
+    updated = true;
+  }
+
+  const hasValidPasswordFields =
+    typeof existing.passwordHash === "string" &&
+    typeof existing.passwordSalt === "string" &&
+    existing.passwordHash.trim() &&
+    existing.passwordSalt.trim();
+
+  if (!hasValidPasswordFields) {
+    existing.passwordHash = passwordData.hash;
+    existing.passwordSalt = passwordData.salt;
+    updated = true;
+  }
+
+  if (updated) {
     await existing.save();
+    console.log(`Synchronized default admin account for ${ADMIN_EMAIL}`);
   }
 }
 
@@ -217,18 +259,20 @@ app.get("/api/health", async (_req, res) => {
   });
 });
 
-// Vercel Serverless Middleware - Ensure DB is connected BEFORE processing API requests
 app.use("/api", async (req, res, next) => {
   if (req.path.startsWith("/health")) {
     return next();
   }
 
-  // Ensure connection is established before moving on
-  if (mongoose.connection.readyState !== 1) {
-      await startServer();
+  try {
+    await ensureDatabaseReady();
+    next();
+  } catch (error) {
+    console.error("API database initialization failed:", error.message);
+    res.status(503).json({
+      error: "Database connection is not ready. Check your Vercel environment variables and MongoDB network access."
+    });
   }
-
-  next();
 });
 
 app.post("/api/auth/signup", async (req, res) => {
@@ -430,19 +474,28 @@ app.get("*", (req, res) => {
   });
 });
 
-async function startServer() {
-  try {
-    if (mongoose.connection.readyState !== 1) {
+async function ensureDatabaseReady() {
+  if (mongoose.connection.readyState === 1) {
+    return;
+  }
+
+  if (!dbReadyPromise) {
+    dbReadyPromise = (async () => {
       await mongoose.connect(MONGODB_URI, { autoIndex: true });
       await ensureDefaultAdmin();
-    }
-  } catch (error) {
-    console.error("MongoDB connection failed:", error.message);
+    })().catch((error) => {
+      dbReadyPromise = null;
+      throw error;
+    });
   }
+
+  await dbReadyPromise;
 }
 
 // Connect to MongoDB
-startServer();
+ensureDatabaseReady().catch((error) => {
+  console.error("MongoDB connection failed:", error.message);
+});
 
 // If not running on Vercel, listen on PORT
 if (process.env.NODE_ENV !== "production") {
