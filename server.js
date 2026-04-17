@@ -9,6 +9,7 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 const MONGODB_URI = process.env.MONGODB_URI;
+const DEFAULT_DB_NAME = process.env.MONGODB_DB_NAME || "family_salon_spa_sauyo";
 const ADMIN_NAME = process.env.ADMIN_NAME || "Salon Admin";
 const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || "admin@familysalonspasauyo.com").trim().toLowerCase();
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "ChangeMe123!";
@@ -22,6 +23,21 @@ if (!MONGODB_URI) {
 
 function normalizeEmail(value = "") {
   return String(value).trim().toLowerCase();
+}
+
+function getMongoConnectionUri(connectionString) {
+  try {
+    const parsed = new URL(connectionString);
+    const pathName = parsed.pathname.replace(/^\/+/, "");
+
+    if (!pathName) {
+      parsed.pathname = `/${DEFAULT_DB_NAME}`;
+    }
+
+    return parsed.toString();
+  } catch {
+    return connectionString;
+  }
 }
 
 function createPasswordHash(password, salt = crypto.randomBytes(16).toString("hex")) {
@@ -481,7 +497,7 @@ async function ensureDatabaseReady() {
 
   if (!dbReadyPromise) {
     dbReadyPromise = (async () => {
-      await mongoose.connect(MONGODB_URI, { autoIndex: true });
+      await mongoose.connect(getMongoConnectionUri(MONGODB_URI), { autoIndex: true });
       await ensureDefaultAdmin();
     })().catch((error) => {
       dbReadyPromise = null;
