@@ -1,2 +1,6 @@
 admin@familysalonspasauyo.com
 ChangeMe123!
+
+mongodb pass
+admin
+ChangeMe123!

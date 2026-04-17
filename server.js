@@ -14,27 +14,10 @@ const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || "admin@familysalonspasauyo.com")
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "ChangeMe123!";
 const SESSION_TTL_DAYS = 7;
 
-let dbReady = false;
-
 if (!MONGODB_URI) {
   console.error("Missing MONGODB_URI. Add it in your .env file.");
   process.exit(1);
 }
-
-mongoose.connection.on("connected", () => {
-  dbReady = true;
-  console.log("Connected to MongoDB");
-});
-
-mongoose.connection.on("disconnected", () => {
-  dbReady = false;
-  console.error("MongoDB disconnected.");
-});
-
-mongoose.connection.on("error", (error) => {
-  dbReady = false;
-  console.error("MongoDB error:", error.message);
-});
 
 function normalizeEmail(value = "") {
   return String(value).trim().toLowerCase();
@@ -136,11 +119,6 @@ app.use(express.static(path.join(__dirname)));
 
 async function requireAuth(req, res, next) {
   try {
-    if (!dbReady) {
-      res.status(503).json({ error: "Database is not ready yet. Please retry in a few seconds." });
-      return;
-    }
-
     const authorization = req.headers.authorization || "";
     const token = authorization.startsWith("Bearer ") ? authorization.slice(7).trim() : "";
 
@@ -220,7 +198,9 @@ async function ensureDefaultAdmin() {
 app.get("/api/health", async (_req, res) => {
   let collections = [];
 
-  if (dbReady) {
+  const isConnected = mongoose.connection.readyState === 1;
+
+  if (isConnected) {
     try {
       collections = await mongoose.connection.db.listCollections().toArray();
     } catch (_error) {
@@ -230,22 +210,22 @@ app.get("/api/health", async (_req, res) => {
 
   res.json({
     ok: true,
-    database: dbReady ? "connected" : "disconnected",
+    database: isConnected ? "connected" : "disconnected",
     dbName: mongoose.connection?.name || null,
     collections: collections.map((item) => item.name),
     adminEmail: ADMIN_EMAIL
   });
 });
 
-app.use("/api", (req, res, next) => {
+// Vercel Serverless Middleware - Ensure DB is connected BEFORE processing API requests
+app.use("/api", async (req, res, next) => {
   if (req.path.startsWith("/health")) {
-    next();
-    return;
+    return next();
   }
 
-  if (!dbReady) {
-    res.status(503).json({ error: "Database is not ready yet. Please retry in a few seconds." });
-    return;
+  // Ensure connection is established before moving on
+  if (mongoose.connection.readyState !== 1) {
+      await startServer();
   }
 
   next();
