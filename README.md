@@ -30,7 +30,7 @@ A modern, responsive website for a family salon and spa business. Showcase your 
 ├── vercel.json         # Vercel deployment configuration
 └── README.md           # Project documentation
 ```
-
+.
 ## 🚀 Getting Started
 
 ### Quick Start
